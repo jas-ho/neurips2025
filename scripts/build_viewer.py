@@ -9,10 +9,22 @@ Optimized for busy researchers on iPad/mobile.
 """
 
 import argparse
+import html
 import json
 from pathlib import Path
 
 DATA_DIR = Path(__file__).parent.parent / "data"
+
+
+def deep_unescape(text: str) -> str:
+    """Repeatedly unescape HTML entities until stable (handles double/triple encoding)."""
+    if not text:
+        return text
+    prev = None
+    while prev != text:
+        prev = text
+        text = html.unescape(text)
+    return text
 
 
 def load_similarity(year: int) -> dict:
@@ -39,8 +51,8 @@ def load_neurips(year: int):
         authors_list = p.get("authors", [])
         if authors_list:
             authors_str = ", ".join(
-                f"{a.get('fullname', 'Unknown')}" +
-                (f" ({a.get('institution')})" if a.get('institution') else "")
+                f"{deep_unescape(a.get('fullname', 'Unknown'))}" +
+                (f" ({deep_unescape(a.get('institution'))})" if a.get('institution') else "")
                 for a in authors_list
             )
         else:
@@ -59,12 +71,16 @@ def load_neurips(year: int):
         else:
             decision_type = "Poster"
 
+        # Unescape HTML entities in text fields (handles double/triple encoding)
+        title = deep_unescape(p.get("name", ""))
+        abstract = deep_unescape(p.get("abstract") or "")
+
         papers.append({
             "id": p["id"],
             "num": p.get("poster_position", ""),  # e.g., "#4902"
-            "title": p.get("name", ""),
+            "title": title,
             "authors": authors_str,
-            "affiliations": [a.get("institution", "") for a in authors_list if a.get("institution")],
+            "affiliations": [deep_unescape(a.get("institution", "")) for a in authors_list if a.get("institution")],
             "decision": decision_type,  # Oral, Poster, Spotlight
             "decision_full": decision,  # Full decision text
             "session": p.get("session", ""),
@@ -75,8 +91,8 @@ def load_neurips(year: int):
             "topic": topic,  # Full topic string
             "topic_category": topic_category,  # Just the main category
             "keywords": p.get("keywords") or [],
-            "text": p.get("abstract") or "",
-            "has_abstract": bool((p.get("abstract") or "").strip()),
+            "text": abstract,
+            "has_abstract": bool(abstract.strip()),
             "url": p.get("paper_url", ""),
             "virtualsite_url": p.get("virtualsite_url", ""),
         })
@@ -1295,7 +1311,7 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
                     ${formatAbstract(d.text, words, useWordBoundary, caseSensitive)}
                     <div class="card-footer">
                         <div style="display: flex; gap: 12px; align-items: center;">
-                            ${d.url ? '<a class="card-link" href="' + d.url + '" target="_blank" rel="noopener">View on OpenReview ↗</a>' : ''}
+                            ${d.url ? '<a class="card-link" href="' + d.url + '" target="_blank" rel="noopener">View on OpenReview</a>' : ''}
                             ${SIMILAR[d.id] ? '<button class="find-similar-btn" onclick="showSimilar(' + d.id + ')">Find Similar</button>' : ''}
                         </div>
                         <div class="card-actions">
