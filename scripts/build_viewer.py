@@ -519,12 +519,12 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
             border-left: 4px solid var(--accent);
         }
         .card-snippet mark {
-            background: linear-gradient(to bottom, transparent 40%, var(--warning) 40%);
+            background: linear-gradient(to bottom, transparent 40%, rgba(0, 210, 106, 0.4) 40%);
             padding: 0 2px;
             font-weight: 600;
         }
         @media (prefers-color-scheme: dark) {
-            .card-snippet mark { background: linear-gradient(to bottom, transparent 40%, #7a5a10 40%); }
+            .card-snippet mark { background: linear-gradient(to bottom, transparent 40%, rgba(0, 210, 106, 0.35) 40%); }
         }
         .card.expanded .card-snippet { display: none; }
 
@@ -871,13 +871,13 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
         }
 
         mark {
-            background: linear-gradient(to bottom, transparent 50%, var(--warning) 50%);
+            background: linear-gradient(to bottom, transparent 50%, rgba(0, 210, 106, 0.4) 50%);
             color: inherit;
             padding: 0 2px;
             font-weight: 600;
         }
         @media (prefers-color-scheme: dark) {
-            mark { background: linear-gradient(to bottom, transparent 50%, #7a5a10 50%); }
+            mark { background: linear-gradient(to bottom, transparent 50%, rgba(0, 210, 106, 0.35) 50%); }
         }
 
         .no-abstract-notice {
@@ -1012,7 +1012,7 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
 
     // Day filters from datetime
     const days = [...new Set(DATA.map(d => getDay(d.datetime)).filter(Boolean))];
-    const dayOrder = ['Friday', 'Saturday', 'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday'];
+    const dayOrder = ['Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday', 'Monday'];
     days.sort((a, b) => dayOrder.indexOf(a) - dayOrder.indexOf(b));
 
     days.forEach(day => {
