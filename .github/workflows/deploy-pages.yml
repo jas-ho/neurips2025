@@ -1,0 +1,28 @@
+name: Deploy to Netlify
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'data/viewer_2025.html'
+      - '.github/workflows/deploy-pages.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build site
+        run: |
+          mkdir _site
+          cp data/viewer_2025.html _site/index.html
+
+      - uses: nwtgck/actions-netlify@v3
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+        with:
+          publish-dir: _site
+          production-deploy: true

@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.uv/
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# OS
+.DS_Store
+
+# PDFs (large, can be re-downloaded)
+data/abstracts_2025/pdfs/
+data/abstracts_2024/pdfs/
+
+# Embeddings cache (large, can be regenerated)
+data/abstracts_2025/embeddings/
+data/abstracts_2024/embeddings/
+
+# Environment variables (secrets)
+.env
