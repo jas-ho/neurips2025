@@ -9,7 +9,7 @@
 # ]
 # ///
 """
-ASH Abstract Embedding Enrichment
+NeurIPS Abstract Embedding Enrichment
 
 Generates OpenAI embeddings for abstracts and computes pairwise similarity
 to enable "Find Similar" functionality in the viewer.
@@ -58,31 +58,38 @@ TOP_K_SIMILAR = 30
 
 
 def get_paths(year: int) -> tuple[Path, Path, Path]:
-    """Get paths for abstracts, embeddings cache, and similarity output."""
-    abstracts_dir = DATA_DIR / f"abstracts_{year}"
-    embeddings_dir = abstracts_dir / "embeddings"
+    """Get paths for papers JSON, embeddings cache, and similarity output."""
+    papers_file = DATA_DIR / f"neurips-{year}-orals-posters.json"
+    embeddings_dir = DATA_DIR / "embeddings"
     similarity_file = DATA_DIR / f"similarity_{year}.json"
-    return abstracts_dir, embeddings_dir, similarity_file
+    return papers_file, embeddings_dir, similarity_file
 
 
-def build_embedding_text(abstract: dict) -> str:
+def build_embedding_text(paper: dict) -> str:
     """
     Build composite text for embedding.
 
     Combines multiple fields to capture semantic meaning:
     - Title and authors for content + network similarity
     - Keywords for topical similarity
-    - Session info for conference-assigned clustering
+    - Topic for conference-assigned clustering
     - Abstract text (truncated) for detailed content
     """
+    # Format authors
+    authors_list = paper.get('authors', [])
+    if isinstance(authors_list, list):
+        authors_str = ', '.join(a.get('fullname', '') for a in authors_list if isinstance(a, dict))
+    else:
+        authors_str = str(authors_list)
+
     parts = [
-        abstract.get('title', ''),
-        abstract.get('authors', ''),
-        ' '.join(abstract.get('keywords', [])),
-        abstract.get('session_title', ''),
-        ' '.join(abstract.get('disease_topics', [])),
+        paper.get('name', ''),  # title
+        authors_str,
+        ' '.join(paper.get('keywords', []) or []),
+        paper.get('topic', ''),
+        paper.get('decision', ''),
         # Truncate abstract text to stay under token limits (~8k for embedding model)
-        (abstract.get('abstract_text', '') or '')[:2000],
+        (paper.get('abstract', '') or '')[:2000],
     ]
     return '\n'.join(filter(None, parts))
 
@@ -98,7 +105,7 @@ def save_json_atomic(filepath: Path, data: dict) -> None:
 class EmbeddingEnricher:
     def __init__(self, year: int, max_concurrent: int = 50):
         self.year = year
-        self.abstracts_dir, self.embeddings_dir, self.similarity_file = get_paths(year)
+        self.papers_file, self.embeddings_dir, self.similarity_file = get_paths(year)
         self.embeddings_dir.mkdir(parents=True, exist_ok=True)
 
         self.client: Optional[AsyncOpenAI] = None  # Lazy init
@@ -116,24 +123,24 @@ class EmbeddingEnricher:
             self.client = AsyncOpenAI()
         return self.client
 
-    def load_abstracts(self) -> list[dict]:
-        """Load all abstracts from JSON files."""
-        abstracts = []
-        for f in sorted(self.abstracts_dir.glob("*.json")):
-            if f.name == "embeddings":
-                continue
-            try:
-                with open(f) as fp:
-                    abstract = json.load(fp)
-                    abstract['_file'] = f.name
-                    abstracts.append(abstract)
-            except json.JSONDecodeError:
-                logger.warning(f"Failed to parse {f.name}")
-        return abstracts
+    def load_papers(self) -> list[dict]:
+        """Load all papers from the NeurIPS JSON file."""
+        if not self.papers_file.exists():
+            logger.error(f"Papers file not found: {self.papers_file}")
+            return []
 
-    def get_cached_embedding(self, paper_id: int) -> Optional[list[float]]:
+        with open(self.papers_file) as f:
+            data = json.load(f)
+
+        papers = data.get('results', [])
+        logger.info(f"Loaded {len(papers)} papers from {self.papers_file.name}")
+        return papers
+
+    def get_cached_embedding(self, paper_id: str | int) -> Optional[list[float]]:
         """Load cached embedding if it exists."""
-        cache_file = self.embeddings_dir / f"{paper_id}.json"
+        # Sanitize paper_id for filename (replace / and other problematic chars)
+        safe_id = str(paper_id).replace('/', '_')
+        cache_file = self.embeddings_dir / f"{safe_id}.json"
         if cache_file.exists():
             try:
                 with open(cache_file) as f:
@@ -143,7 +150,7 @@ class EmbeddingEnricher:
                 pass
         return None
 
-    async def generate_embedding(self, text: str, paper_id: int,
+    async def generate_embedding(self, text: str, paper_id: str | int,
                                   dry_run: bool = False) -> Optional[list[float]]:
         """Generate embedding for text using OpenAI API."""
         if dry_run:
@@ -160,7 +167,8 @@ class EmbeddingEnricher:
                 self.total_tokens += response.usage.total_tokens
 
                 # Cache the embedding
-                cache_file = self.embeddings_dir / f"{paper_id}.json"
+                safe_id = str(paper_id).replace('/', '_')
+                cache_file = self.embeddings_dir / f"{safe_id}.json"
                 async with aiofiles.open(cache_file, 'w') as f:
                     await f.write(json.dumps({
                         'paper_id': paper_id,
@@ -174,11 +182,11 @@ class EmbeddingEnricher:
                 logger.error(f"Failed to embed {paper_id}: {e}")
                 return None
 
-    async def process_abstract(self, abstract: dict, index: int, total: int,
-                                start_time: float, force: bool = False,
-                                dry_run: bool = False) -> tuple[int, Optional[list[float]]]:
-        """Process a single abstract - check cache or generate embedding."""
-        paper_id = abstract['paper_id']
+    async def process_paper(self, paper: dict, index: int, total: int,
+                            start_time: float, force: bool = False,
+                            dry_run: bool = False) -> tuple[str | int, Optional[list[float]]]:
+        """Process a single paper - check cache or generate embedding."""
+        paper_id = paper['id']
 
         # Check cache first (unless force)
         if not force:
@@ -188,7 +196,7 @@ class EmbeddingEnricher:
                 return paper_id, cached
 
         # Build text and generate embedding
-        text = build_embedding_text(abstract)
+        text = build_embedding_text(paper)
         if not text.strip():
             logger.warning(f"Empty text for {paper_id}")
             self.failed += 1
@@ -216,10 +224,10 @@ class EmbeddingEnricher:
 
         return paper_id, embedding
 
-    def compute_similarity(self, embeddings: dict[int, list[float]],
-                           dry_run: bool = False) -> dict[int, list[int]]:
+    def compute_similarity(self, embeddings: dict[str, list[float]],
+                           dry_run: bool = False) -> dict[str, list[str]]:
         """
-        Compute top-K similar abstracts for each abstract.
+        Compute top-K similar papers for each paper.
 
         Uses cosine similarity with numpy for efficiency.
         """
@@ -229,7 +237,7 @@ class EmbeddingEnricher:
         if n == 0:
             return {}
 
-        logger.info(f"Computing similarity matrix for {n} abstracts...")
+        logger.info(f"Computing similarity matrix for {n} papers...")
 
         # Build embedding matrix
         matrix = np.array([embeddings[pid] for pid in paper_ids], dtype=np.float32)
@@ -271,29 +279,31 @@ class EmbeddingEnricher:
         return similarity
 
     async def run(self, force: bool = False, similarity_only: bool = False,
-                  dry_run: bool = False, max_abstracts: Optional[int] = None):
+                  dry_run: bool = False, max_papers: Optional[int] = None):
         """Run the embedding enrichment pipeline."""
 
         if dry_run:
             logger.info("=== DRY RUN MODE - No files will be written ===")
 
-        # Load abstracts
-        logger.info(f"Loading abstracts from {self.abstracts_dir}...")
-        abstracts = self.load_abstracts()
-        logger.info(f"Loaded {len(abstracts)} abstracts")
+        # Load papers
+        logger.info(f"Loading papers from {self.papers_file}...")
+        papers = self.load_papers()
 
-        if max_abstracts:
-            abstracts = abstracts[:max_abstracts]
-            logger.info(f"Limited to {max_abstracts} abstracts for testing")
+        if not papers:
+            logger.error("No papers loaded. Exiting.")
+            return
+
+        if max_papers:
+            papers = papers[:max_papers]
+            logger.info(f"Limited to {max_papers} papers for testing")
 
         # Count existing embeddings
         existing = set(
-            int(f.stem) for f in self.embeddings_dir.glob("*.json")
-            if f.stem.isdigit()
+            f.stem for f in self.embeddings_dir.glob("*.json")
         )
         logger.info(f"Found {len(existing)} cached embeddings")
 
-        embeddings: dict[int, list[float]] = {}
+        embeddings: dict[str, list[float]] = {}
 
         if not similarity_only:
             # Generate embeddings
@@ -301,9 +311,9 @@ class EmbeddingEnricher:
             start_time = time.time()
 
             tasks = [
-                self.process_abstract(a, i, len(abstracts), start_time,
-                                       force=force, dry_run=dry_run)
-                for i, a in enumerate(abstracts)
+                self.process_paper(p, i, len(papers), start_time,
+                                   force=force, dry_run=dry_run)
+                for i, p in enumerate(papers)
             ]
 
             results = await asyncio.gather(*tasks)
@@ -322,16 +332,14 @@ class EmbeddingEnricher:
         if not dry_run:
             logger.info("Loading all cached embeddings...")
             for f in self.embeddings_dir.glob("*.json"):
-                if not f.stem.isdigit():
-                    continue
-                paper_id = int(f.stem)
-                if paper_id not in embeddings:
-                    try:
-                        with open(f) as fp:
-                            data = json.load(fp)
+                try:
+                    with open(f) as fp:
+                        data = json.load(fp)
+                        paper_id = data['paper_id']
+                        if paper_id not in embeddings:
                             embeddings[paper_id] = data['embedding']
-                    except (json.JSONDecodeError, KeyError):
-                        pass
+                except (json.JSONDecodeError, KeyError):
+                    pass
 
             logger.info(f"Total embeddings loaded: {len(embeddings)}")
 
@@ -340,10 +348,7 @@ class EmbeddingEnricher:
 
             # Save similarity file
             logger.info(f"Saving similarity data to {self.similarity_file}...")
-
-            # Convert keys to strings for JSON
-            similarity_json = {str(k): v for k, v in similarity.items()}
-            save_json_atomic(self.similarity_file, similarity_json)
+            save_json_atomic(self.similarity_file, similarity)
 
             size_mb = self.similarity_file.stat().st_size / 1024 / 1024
             logger.info(f"Saved {self.similarity_file.name} ({size_mb:.2f} MB)")
@@ -367,7 +372,7 @@ async def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description='Generate embeddings and compute similarity for ASH abstracts',
+        description='Generate embeddings and compute similarity for NeurIPS papers',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -387,8 +392,8 @@ Examples:
   %(prog)s --max 100
         """
     )
-    parser.add_argument('--year', type=int, default=2025, choices=[2024, 2025],
-                        help='ASH year (default: 2025)')
+    parser.add_argument('--year', type=int, default=2025,
+                        help='NeurIPS year (default: 2025)')
     parser.add_argument('--force', action='store_true',
                         help='Regenerate all embeddings (ignore cache)')
     parser.add_argument('--similarity-only', action='store_true',
@@ -396,7 +401,7 @@ Examples:
     parser.add_argument('--dry-run', action='store_true',
                         help='Preview what would be done without writing files')
     parser.add_argument('--max', type=int, default=None,
-                        help='Max abstracts to process (for testing)')
+                        help='Max papers to process (for testing)')
     parser.add_argument('--workers', type=int, default=50,
                         help='Concurrent API requests (default: 50)')
 
@@ -415,7 +420,7 @@ Examples:
         force=args.force,
         similarity_only=args.similarity_only,
         dry_run=args.dry_run,
-        max_abstracts=args.max,
+        max_papers=args.max,
     )
 
 
