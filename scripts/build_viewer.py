@@ -1339,7 +1339,7 @@ def main():
     args = parser.parse_args()
 
     year = args.year
-    output_file = DATA_DIR / f"viewer_{year}.html"
+    output_file = DATA_DIR / "index.html"
 
     print(f"Loading NeurIPS {year} papers...")
     papers = load_neurips(year)
