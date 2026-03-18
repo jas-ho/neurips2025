@@ -20,3 +20,7 @@ data/embeddings/
 
 # Environment variables (secrets)
 .env
+
+# Dolt database files (added by bd init)
+.dolt/
+*.db
